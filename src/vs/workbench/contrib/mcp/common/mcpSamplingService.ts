@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { mapFindFirst } from '../../../../base/common/arraysFind.js';
+import { Sequencer } from '../../../../base/common/async.js';
 import { decodeBase64 } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Event } from '../../../../base/common/event.js';
@@ -40,6 +41,8 @@ export class McpSamplingService extends Disposable implements IMcpSamplingServic
 
 	private readonly _logs: McpSamplingLog;
 
+	private readonly _modelSequencer = new Sequencer();
+
 	constructor(
 		@ILanguageModelsService private readonly _languageModelsService: ILanguageModelsService,
 		@IConfigurationService private readonly _configurationService: IConfigurationService,
@@ -72,9 +75,9 @@ export class McpSamplingService extends Disposable implements IMcpSamplingServic
 			messages.unshift({ role: ChatMessageRole.System, content: [{ type: 'text', value: opts.params.systemPrompt }] });
 		}
 
-		const model = await this._getMatchingModel(opts);
+		const model = await this._modelSequencer.queue(() => this._getMatchingModel(opts));
 		// todo@connor4312: nullExtensionDescription.identifier -> undefined with API update
-		const response = await this._languageModelsService.sendChatRequest(model, new ExtensionIdentifier('Github.copilot-chat'), messages, {}, token);
+		const response = await this._languageModelsService.sendChatRequest(model, new ExtensionIdentifier('core'), messages, {}, token);
 
 		let responseText = '';
 
@@ -84,12 +87,12 @@ export class McpSamplingService extends Disposable implements IMcpSamplingServic
 			for await (const part of response.stream) {
 				if (Array.isArray(part)) {
 					for (const p of part) {
-						if (p.part.type === 'text') {
-							responseText += p.part.value;
+						if (p.type === 'text') {
+							responseText += p.value;
 						}
 					}
-				} else if (part.part.type === 'text') {
-					responseText += part.part.value;
+				} else if (part.type === 'text') {
+					responseText += part.value;
 				}
 			}
 		})();
@@ -124,7 +127,7 @@ export class McpSamplingService extends Disposable implements IMcpSamplingServic
 			const retry = await this._showContextual(
 				opts.isDuringToolCall,
 				localize('mcp.sampling.allowDuringChat.title', 'Allow MCP tools from "{0}" to make LLM requests?', opts.server.definition.label),
-				localize('mcp.sampling.allowDuringChat.desc', 'The MCP server "{0}" has issued a request to make an language model call. Do you want to allow it to make requests during chat?', opts.server.definition.label),
+				localize('mcp.sampling.allowDuringChat.desc', 'The MCP server "{0}" has issued a request to make a language model call. Do you want to allow it to make requests during chat?', opts.server.definition.label),
 				this.allowButtons(opts.server, 'allowedDuringChat')
 			);
 			if (retry) {
@@ -135,7 +138,7 @@ export class McpSamplingService extends Disposable implements IMcpSamplingServic
 			const retry = await this._showContextual(
 				opts.isDuringToolCall,
 				localize('mcp.sampling.allowOutsideChat.title', 'Allow MCP server "{0}" to make LLM requests?', opts.server.definition.label),
-				localize('mcp.sampling.allowOutsideChat.desc', 'The MCP server "{0}" has issued a request to make an language model call. Do you want to allow it to make requests, outside of tool calls during chat?', opts.server.definition.label),
+				localize('mcp.sampling.allowOutsideChat.desc', 'The MCP server "{0}" has issued a request to make a language model call. Do you want to allow it to make requests, outside of tool calls during chat?', opts.server.definition.label),
 				this.allowButtons(opts.server, 'allowedOutsideChat')
 			);
 			if (retry) {

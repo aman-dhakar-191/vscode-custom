@@ -15,7 +15,7 @@ import { strictEqual } from 'assert';
 import { ExtensionIdentifier } from '../../../../../../platform/extensions/common/extensions.js';
 import { IChatAgent } from '../../../../chat/common/chatAgents.js';
 import { importAMDNodeModule } from '../../../../../../amdX.js';
-import { ChatAgentLocation, ChatMode } from '../../../../chat/common/constants.js';
+import { ChatAgentLocation, ChatModeKind } from '../../../../chat/common/constants.js';
 
 suite('Terminal Initial Hint Addon', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -28,25 +28,27 @@ suite('Terminal Initial Hint Addon', () => {
 		id: 'termminal',
 		name: 'terminal',
 		extensionId: new ExtensionIdentifier('test'),
+		extensionVersion: undefined,
 		extensionPublisherId: 'test',
 		extensionDisplayName: 'test',
 		metadata: {},
 		slashCommands: [{ name: 'test', description: 'test' }],
 		disambiguation: [],
 		locations: [ChatAgentLocation.fromRaw('terminal')],
-		modes: [ChatMode.Ask],
+		modes: [ChatModeKind.Ask],
 		invoke: async () => { return {}; }
 	};
 	const editorAgent: IChatAgent = {
 		id: 'editor',
 		name: 'editor',
 		extensionId: new ExtensionIdentifier('test-editor'),
+		extensionVersion: undefined,
 		extensionPublisherId: 'test-editor',
 		extensionDisplayName: 'test-editor',
 		metadata: {},
 		slashCommands: [{ name: 'test', description: 'test' }],
 		locations: [ChatAgentLocation.fromRaw('editor')],
-		modes: [ChatMode.Ask],
+		modes: [ChatModeKind.Ask],
 		disambiguation: [],
 		invoke: async () => { return {}; }
 	};
@@ -92,16 +94,6 @@ suite('Terminal Initial Hint Addon', () => {
 			strictEqual(eventCount, 1);
 			onDidChangeAgentsEmitter.fire(agent);
 			strictEqual(eventCount, 1);
-		});
-	});
-	suite('Input', () => {
-		test('hint is not shown when there has been input', () => {
-			onDidChangeAgentsEmitter.fire(agent);
-			xterm.writeln('data');
-			setTimeout(() => {
-				xterm.focus();
-				strictEqual(eventCount, 0);
-			}, 50);
 		});
 	});
 });

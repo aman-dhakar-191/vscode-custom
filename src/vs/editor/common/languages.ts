@@ -757,6 +757,8 @@ export interface InlineCompletionContext {
 
 	readonly includeInlineEdits: boolean;
 	readonly includeInlineCompletions: boolean;
+	readonly requestIssuedDateTime: number;
+	readonly earliestShownDateTime: number;
 }
 
 export class SelectedSuggestionInfo {
@@ -830,6 +832,11 @@ export interface InlineCompletion {
 	readonly warning?: InlineCompletionWarning;
 
 	readonly displayLocation?: InlineCompletionDisplayLocation;
+
+	/**
+	 * Used for telemetry.
+	 */
+	readonly correlationId?: string | undefined;
 }
 
 export interface InlineCompletionWarning {
@@ -837,8 +844,14 @@ export interface InlineCompletionWarning {
 	icon?: IconPath;
 }
 
+export enum InlineCompletionDisplayLocationKind {
+	Code = 1,
+	Label = 2
+}
+
 export interface InlineCompletionDisplayLocation {
 	range: IRange;
+	kind: InlineCompletionDisplayLocationKind;
 	label: string;
 }
 
@@ -870,12 +883,6 @@ export interface InlineCompletionsProvider<T extends InlineCompletions = InlineC
 	provideInlineCompletions(model: model.ITextModel, position: Position, context: InlineCompletionContext, token: CancellationToken): ProviderResult<T>;
 
 	/**
-	 * @experimental
-	 * @internal
-	*/
-	provideInlineEditsForRange?(model: model.ITextModel, range: Range, context: InlineCompletionContext, token: CancellationToken): ProviderResult<T>;
-
-	/**
 	 * Will be called when an item is shown.
 	 * @param updatedInsertText Is useful to understand bracket completion.
 	*/
@@ -896,7 +903,7 @@ export interface InlineCompletionsProvider<T extends InlineCompletions = InlineC
 	 * Is called when an inline completion item is no longer being used.
 	 * Provides a reason of why it is not used anymore.
 	*/
-	handleEndOfLifetime?(completions: T, item: T['items'][number], reason: InlineCompletionEndOfLifeReason<T['items'][number]>): void;
+	handleEndOfLifetime?(completions: T, item: T['items'][number], reason: InlineCompletionEndOfLifeReason<T['items'][number]>, lifetimeSummary: LifetimeSummary): void;
 
 	/**
 	 * Will be called when a completions list is no longer in use and can be garbage-collected.
@@ -911,11 +918,16 @@ export interface InlineCompletionsProvider<T extends InlineCompletions = InlineC
 	 */
 	groupId?: InlineCompletionProviderGroupId;
 
+	/** @internal */
+	providerId?: ProviderId;
+
 	/**
 	 * Returns a list of preferred provider {@link groupId}s.
 	 * The current provider is only requested for completions if no provider with a preferred group id returned a result.
 	 */
 	yieldsToGroupIds?: InlineCompletionProviderGroupId[];
+
+	excludesGroupIds?: InlineCompletionProviderGroupId[];
 
 	displayName?: string;
 
@@ -924,7 +936,58 @@ export interface InlineCompletionsProvider<T extends InlineCompletions = InlineC
 	toString?(): string;
 }
 
-export type InlineCompletionsDisposeReason = 'lostRace' | 'tokenCancellation' | 'other';
+
+/** @internal */
+export class ProviderId {
+	public static fromExtensionId(extensionId: string | undefined): ProviderId {
+		return new ProviderId(extensionId, undefined, undefined);
+	}
+
+	constructor(
+		public readonly extensionId: string | undefined,
+		public readonly extensionVersion: string | undefined,
+		public readonly providerId: string | undefined
+	) {
+	}
+
+	toString(): string {
+		let result = '';
+		if (this.extensionId) {
+			result += this.extensionId;
+		}
+		if (this.extensionVersion) {
+			result += `@${this.extensionVersion}`;
+		}
+		if (this.providerId) {
+			result += `:${this.providerId}`;
+		}
+		if (result.length === 0) {
+			result = 'unknown';
+		}
+		return result;
+	}
+}
+
+/** @internal */
+export class VersionedExtensionId {
+	public static tryCreate(extensionId: string | undefined, version: string | undefined): VersionedExtensionId | undefined {
+		if (!extensionId || !version) {
+			return undefined;
+		}
+		return new VersionedExtensionId(extensionId, version);
+	}
+
+	constructor(
+		public readonly extensionId: string,
+		public readonly version: string,
+	) { }
+
+	toString(): string {
+		return `${this.extensionId}@${this.version}`;
+	}
+}
+
+export type InlineCompletionsDisposeReason = { kind: 'lostRace' | 'tokenCancellation' | 'other' | 'empty' | 'notTaken' };
 
 export enum InlineCompletionEndOfLifeReasonKind {
 	Accepted = 0,
@@ -940,6 +1003,37 @@ export type InlineCompletionEndOfLifeReason<TInlineCompletion = InlineCompletion
 	kind: InlineCompletionEndOfLifeReasonKind.Ignored;
 	supersededBy?: TInlineCompletion;
 	userTypingDisagreed: boolean;
+};
+
+export type LifetimeSummary = {
+	requestUuid: string;
+	correlationId: string | undefined;
+	partiallyAccepted: number;
+	partiallyAcceptedCountSinceOriginal: number;
+	partiallyAcceptedRatioSinceOriginal: number;
+	partiallyAcceptedCharactersSinceOriginal: number;
+	shown: boolean;
+	shownDuration: number;
+	shownDurationUncollapsed: number;
+	timeUntilShown: number | undefined;
+	timeUntilProviderRequest: number;
+	timeUntilProviderResponse: number;
+	editorType: string;
+	viewKind: string | undefined;
+	error: string | undefined;
+	preceeded: boolean;
+	languageId: string;
+	requestReason: string;
+	cursorColumnDistance?: number;
+	cursorLineDistance?: number;
+	lineCountOriginal?: number;
+	lineCountModified?: number;
+	characterCountOriginal?: number;
+	characterCountModified?: number;
+	disjointReplacements?: number;
+	sameShapeReplacements?: boolean;
+	typingInterval: number;
+	typingIntervalCharacterCount: number;
 };
 
 export interface CodeAction {
@@ -2218,7 +2312,7 @@ export interface CodeLens {
 }
 
 export interface CodeLensList {
-	lenses: CodeLens[];
+	readonly lenses: readonly CodeLens[];
 	dispose?(): void;
 }
 

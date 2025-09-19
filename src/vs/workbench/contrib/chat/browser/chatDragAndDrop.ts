@@ -10,7 +10,7 @@ import { coalesce } from '../../../../base/common/arrays.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { UriList } from '../../../../base/common/dataTransfer.js';
-import { IDisposable } from '../../../../base/common/lifecycle.js';
+import { IDisposable, toDisposable } from '../../../../base/common/lifecycle.js';
 import { Mimes } from '../../../../base/common/mime.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize } from '../../../../nls.js';
@@ -25,6 +25,7 @@ import { IChatAttachmentResolveService, ImageTransferData } from './chatAttachme
 import { ChatAttachmentModel } from './chatAttachmentModel.js';
 import { IChatInputStyles } from './chatInputPart.js';
 import { convertStringToUInt8Array } from './imageUtils.js';
+import { extractSCMHistoryItemDropData } from '../../scm/browser/scmHistoryChatContext.js';
 
 enum ChatDragAndDropType {
 	FILE_INTERNAL,
@@ -34,7 +35,8 @@ enum ChatDragAndDropType {
 	SYMBOL,
 	HTML,
 	MARKER,
-	NOTEBOOK_CELL_OUTPUT
+	NOTEBOOK_CELL_OUTPUT,
+	SCM_HISTORY_ITEM
 }
 
 const IMAGE_DATA_REGEX = /^data:image\/[a-z]+;base64,/;
@@ -45,6 +47,7 @@ export class ChatDragAndDrop extends Themable {
 	private readonly overlays: Map<HTMLElement, { overlay: HTMLElement; disposable: IDisposable }> = new Map();
 	private overlayText?: HTMLElement;
 	private overlayTextBackground: string = '';
+	private disableOverlay: boolean = false;
 
 	constructor(
 		private readonly attachmentModel: ChatAttachmentModel,
@@ -59,6 +62,18 @@ export class ChatDragAndDrop extends Themable {
 		super(themeService);
 
 		this.updateStyles();
+
+		this._register(toDisposable(() => {
+			this.overlays.forEach(({ overlay, disposable }) => {
+				disposable.dispose();
+				overlay.remove();
+			});
+
+			this.overlays.clear();
+			this.currentActiveTarget = undefined;
+			this.overlayText?.remove();
+			this.overlayText = undefined;
+		}));
 	}
 
 	addOverlay(target: HTMLElement, overlayContainer: HTMLElement): void {
@@ -81,6 +96,10 @@ export class ChatDragAndDrop extends Themable {
 		}
 	}
 
+	setDisabledOverlay(disable: boolean) {
+		this.disableOverlay = disable;
+	}
+
 	private currentActiveTarget: HTMLElement | undefined = undefined;
 	private createOverlay(target: HTMLElement, overlayContainer: HTMLElement): { overlay: HTMLElement; disposable: IDisposable } {
 		const overlay = document.createElement('div');
@@ -90,6 +109,10 @@ export class ChatDragAndDrop extends Themable {
 
 		const disposable = new DragAndDropObserver(target, {
 			onDragOver: (e) => {
+				if (this.disableOverlay) {
+					return;
+				}
+
 				e.stopPropagation();
 				e.preventDefault();
 
@@ -107,6 +130,9 @@ export class ChatDragAndDrop extends Themable {
 
 			},
 			onDragLeave: (e) => {
+				if (this.disableOverlay) {
+					return;
+				}
 				if (target === this.currentActiveTarget) {
 					this.currentActiveTarget = undefined;
 				}
@@ -114,6 +140,9 @@ export class ChatDragAndDrop extends Themable {
 				this.onDragLeave(e, target);
 			},
 			onDrop: (e) => {
+				if (this.disableOverlay) {
+					return;
+				}
 				e.stopPropagation();
 				e.preventDefault();
 
@@ -165,6 +194,8 @@ export class ChatDragAndDrop extends Themable {
 		// This is an estimation based on the datatransfer types/items
 		if (containsDragType(e, CodeDataTransfers.NOTEBOOK_CELL_OUTPUT)) {
 			return ChatDragAndDropType.NOTEBOOK_CELL_OUTPUT;
+		} else if (containsDragType(e, CodeDataTransfers.SCM_HISTORY_ITEM)) {
+			return ChatDragAndDropType.SCM_HISTORY_ITEM;
 		} else if (containsImageDragType(e)) {
 			return this.extensionService.extensions.some(ext => isProposedApiEnabled(ext, 'chatReferenceBinaryData')) ? ChatDragAndDropType.IMAGE : undefined;
 		} else if (containsDragType(e, 'text/html')) {
@@ -200,6 +231,7 @@ export class ChatDragAndDrop extends Themable {
 			case ChatDragAndDropType.MARKER: return localize('problem', 'Problem');
 			case ChatDragAndDropType.HTML: return localize('url', 'URL');
 			case ChatDragAndDropType.NOTEBOOK_CELL_OUTPUT: return localize('notebookOutput', 'Output');
+			case ChatDragAndDropType.SCM_HISTORY_ITEM: return localize('scmHistoryItem', 'Change');
 		}
 	}
 
@@ -212,6 +244,13 @@ export class ChatDragAndDrop extends Themable {
 			const notebookOutputData = extractNotebookCellOutputDropData(e);
 			if (notebookOutputData) {
 				return this.chatAttachmentResolveService.resolveNotebookOutputAttachContext(notebookOutputData);
+			}
+		}
+
+		if (containsDragType(e, CodeDataTransfers.SCM_HISTORY_ITEM)) {
+			const scmHistoryItemData = extractSCMHistoryItemDropData(e);
+			if (scmHistoryItemData) {
+				return this.chatAttachmentResolveService.resolveSourceControlHistoryItemAttachContext(scmHistoryItemData);
 			}
 		}
 

@@ -7,7 +7,7 @@ import { isEqual } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { getCodeEditor } from '../../../../../editor/browser/editorBrowser.js';
 import { SnippetController2 } from '../../../../../editor/contrib/snippet/browser/snippetController2.js';
-import { localize } from '../../../../../nls.js';
+import { localize, localize2 } from '../../../../../nls.js';
 import { Action2, MenuId, registerAction2 } from '../../../../../platform/actions/common/actions.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
@@ -27,6 +27,7 @@ import { ChatContextKeys } from '../../common/chatContextKeys.js';
 import { CHAT_CATEGORY } from '../actions/chatActions.js';
 import { askForPromptFileName } from './pickers/askForPromptName.js';
 import { askForPromptSourceFolder } from './pickers/askForPromptSourceFolder.js';
+import { IChatModeService } from '../../common/chatModes.js';
 
 
 class AbstractNewPromptFileAction extends Action2 {
@@ -54,10 +55,10 @@ class AbstractNewPromptFileAction extends Action2 {
 		const commandService = accessor.get(ICommandService);
 		const notificationService = accessor.get(INotificationService);
 		const userDataSyncEnablementService = accessor.get(IUserDataSyncEnablementService);
-		const snippetService = accessor.get(ISnippetsService);
 		const editorService = accessor.get(IEditorService);
 		const fileService = accessor.get(IFileService);
 		const instaService = accessor.get(IInstantiationService);
+		const chatModeService = accessor.get(IChatModeService);
 
 		const selectedFolder = await instaService.invokeFunction(askForPromptSourceFolder, this.type);
 		if (!selectedFolder) {
@@ -80,15 +81,10 @@ class AbstractNewPromptFileAction extends Action2 {
 
 		const editor = getCodeEditor(editorService.activeTextEditorControl);
 		if (editor && editor.hasModel() && isEqual(editor.getModel().uri, promptUri)) {
-			const languageId = getLanguageIdForPromptsType(this.type);
-
-			const snippets = await snippetService.getSnippets(languageId, { fileTemplateSnippets: true, noRecencySort: true, includeNoPrefixSnippets: true });
-			if (snippets.length > 0) {
-				SnippetController2.get(editor)?.apply([{
-					range: editor.getModel().getFullModelRange(),
-					template: snippets[0].body
-				}]);
-			}
+			SnippetController2.get(editor)?.apply([{
+				range: editor.getModel().getFullModelRange(),
+				template: this.getDefaultContentSnippet(this.type, chatModeService),
+			}]);
 		}
 
 		if (selectedFolder.storage !== 'user') {
@@ -143,7 +139,39 @@ class AbstractNewPromptFileAction extends Action2 {
 			},
 		);
 	}
+
+	private getDefaultContentSnippet(promptType: PromptsType, chatModeService: IChatModeService): string {
+		const modes = chatModeService.getModes();
+		const modeNames = modes.builtin.map(mode => mode.name).join(',') + (modes.custom.length ? (',' + modes.custom.map(mode => mode.name).join(',')) : '');
+		switch (promptType) {
+			case PromptsType.prompt:
+				return [
+					`---`,
+					`mode: \${1|${modeNames}|}`,
+					`---`,
+					`\${2:Define the task to achieve, including specific requirements, constraints, and success criteria.}`,
+				].join('\n');
+			case PromptsType.instructions:
+				return [
+					`---`,
+					`applyTo: '\${1|**,**/*.ts|}'`,
+					`---`,
+					`\${2:Provide project context and coding guidelines that AI should follow when generating code, answering questions, or reviewing changes.}`,
+				].join('\n');
+			case PromptsType.mode:
+				return [
+					`---`,
+					`description: '\${1:Description of the custom chat mode.}'`,
+					`tools: []`,
+					`---`,
+					`\${2:Define the purpose of this chat mode and how AI should behave: response style, available tools, focus areas, and any mode-specific instructions or constraints.}`,
+				].join('\n');
+			default:
+				throw new Error(`Unknown prompt type: ${promptType}`);
+		}
+	}
 }
+
 
 
 export const NEW_PROMPT_COMMAND_ID = 'workbench.command.new.prompt';
@@ -168,8 +196,52 @@ class NewModeFileAction extends AbstractNewPromptFileAction {
 	}
 }
 
+class NewUntitledPromptFileAction extends Action2 {
+	constructor() {
+		super({
+			id: 'workbench.command.new.untitled.prompt',
+			title: localize2('commands.new.untitled.prompt.title', "New Untitled Prompt File"),
+			f1: true,
+			precondition: ContextKeyExpr.and(PromptsConfig.enabledCtx, ChatContextKeys.enabled),
+			category: CHAT_CATEGORY,
+			keybinding: {
+				weight: KeybindingWeight.WorkbenchContrib
+			},
+		});
+	}
+
+	public override async run(accessor: ServicesAccessor) {
+		const editorService = accessor.get(IEditorService);
+		const snippetService = accessor.get(ISnippetsService);
+
+		const languageId = getLanguageIdForPromptsType(PromptsType.prompt);
+
+		const input = await editorService.openEditor({
+			resource: undefined,
+			languageId,
+			options: {
+				pinned: true
+			}
+		});
+
+		const editor = getCodeEditor(editorService.activeTextEditorControl);
+		if (editor && editor.hasModel()) {
+			const snippets = await snippetService.getSnippets(languageId, { fileTemplateSnippets: true, noRecencySort: true, includeNoPrefixSnippets: true });
+			if (snippets.length > 0) {
+				SnippetController2.get(editor)?.apply([{
+					range: editor.getModel().getFullModelRange(),
+					template: snippets[0].body
+				}]);
+			}
+		}
+
+		return input;
+	}
+}
+
 export function registerNewPromptFileActions(): void {
 	registerAction2(NewPromptFileAction);
 	registerAction2(NewInstructionsFileAction);
 	registerAction2(NewModeFileAction);
+	registerAction2(NewUntitledPromptFileAction);
 }

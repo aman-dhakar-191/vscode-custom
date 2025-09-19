@@ -3,18 +3,17 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { ChatMode } from '../../constants.js';
+import { ChatModeKind } from '../../constants.js';
 import { URI } from '../../../../../../base/common/uri.js';
 import { Event } from '../../../../../../base/common/event.js';
-import { TMetadata } from '../parsers/promptHeader/headerBase.js';
 import { ITextModel } from '../../../../../../editor/common/model.js';
 import { IDisposable } from '../../../../../../base/common/lifecycle.js';
-import { TextModelPromptParser } from '../parsers/textModelPromptParser.js';
 import { CancellationToken } from '../../../../../../base/common/cancellation.js';
 import { PromptsType } from '../promptTypes.js';
 import { createDecorator } from '../../../../../../platform/instantiation/common/instantiation.js';
-import { ITopError } from '../parsers/types.js';
-import { ResourceSet } from '../../../../../../base/common/map.js';
+import { YamlNode, YamlParseError } from '../../../../../../base/common/yaml.js';
+import { IChatModeInstructions } from '../../chatModes.js';
+import { ParsedPromptFile } from './newPromptsParser.js';
 
 /**
  * Provides prompt services.
@@ -47,32 +46,6 @@ export interface IPromptPath {
 	readonly type: PromptsType;
 }
 
-/**
- * Type for a shared prompt parser instance returned by the {@link IPromptsService}.
- * Because the parser is shared, we omit the `dispose` method from
- * the original type so the caller cannot dispose it prematurely
- */
-export type TSharedPrompt = Omit<TextModelPromptParser, 'dispose'>;
-
-/**
- * Metadata node object in a hierarchical tree of prompt references.
- */
-export interface IMetadata {
-	/**
-	 * URI of a prompt file.
-	 */
-	readonly uri: URI;
-
-	/**
-	 * Metadata of the prompt file.
-	 */
-	readonly metadata: TMetadata | null;
-
-	/**
-	 * List of metadata for each valid child prompt reference.
-	 */
-	readonly children?: readonly IMetadata[];
-}
 
 export interface ICustomChatMode {
 	/**
@@ -81,7 +54,7 @@ export interface ICustomChatMode {
 	readonly uri: URI;
 
 	/**
-	 * Name of the custom chat mode.
+	 * Name of the custom chat mode as used in prompt files or contexts
 	 */
 	readonly name: string;
 
@@ -96,9 +69,14 @@ export interface ICustomChatMode {
 	readonly tools?: readonly string[];
 
 	/**
-	 * Contents of the custom chat mode file body.
+	 * Model metadata in the prompt header.
 	 */
-	readonly body: string;
+	readonly model?: string;
+
+	/**
+	 * Contents of the custom chat mode file body and other mode instructions.
+	 */
+	readonly modeInstructions: IChatModeInstructions;
 }
 
 /**
@@ -116,7 +94,7 @@ interface ICombinedAgentToolsMetadata {
 	 * Resulting chat mode of a prompt, based on modes
 	 * used in the entire tree of prompt references.
 	 */
-	readonly mode: ChatMode.Agent;
+	readonly mode: ChatModeKind.Agent;
 }
 
 /**
@@ -134,7 +112,7 @@ interface ICombinedNonAgentToolsMetadata {
 	 * Resulting chat mode of a prompt, based on modes
 	 * used in the entire tree of prompt references.
 	 */
-	readonly mode?: ChatMode.Ask | ChatMode.Edit;
+	readonly mode?: ChatModeKind.Ask | ChatModeKind.Edit;
 }
 
 /**
@@ -149,10 +127,10 @@ export interface IPromptsService extends IDisposable {
 	readonly _serviceBrand: undefined;
 
 	/**
-	 * Get a prompt syntax parser for the provided text model.
-	 * See {@link TextModelPromptParser} for more info on the parser API.
+	 * The parsed prompt file for the provided text model.
+	 * @param textModel Returns the parsed prompt file.
 	 */
-	getSyntaxParserFor(model: ITextModel): TSharedPrompt & { isDisposed: false };
+	getParsedPromptFile(textModel: ITextModel): ParsedPromptFile;
 
 	/**
 	 * List all available prompt files.
@@ -173,18 +151,12 @@ export interface IPromptsService extends IDisposable {
 	/**
 	 * Gets the prompt file for a slash command.
 	 */
-	resolvePromptSlashCommand(data: IChatPromptSlashCommand, _token: CancellationToken): Promise<IPromptParserResult | undefined>;
+	resolvePromptSlashCommand(data: IChatPromptSlashCommand, _token: CancellationToken): Promise<ParsedPromptFile | undefined>;
 
 	/**
 	 * Returns a prompt command if the command name is valid.
 	 */
 	findPromptSlashCommands(): Promise<IChatPromptSlashCommand[]>;
-
-	/**
-	 * Find all instruction files which have a glob pattern in their
-	 * 'applyTo' metadata record that match the provided list of files.
-	 */
-	findInstructionFilesFor(fileUris: readonly URI[], ignoreInstructions?: ResourceSet): Promise<readonly { uri: URI; reason: string }[]>;
 
 	/**
 	 * Event that is triggered when the list of custom chat modes changes.
@@ -197,20 +169,10 @@ export interface IPromptsService extends IDisposable {
 	getCustomChatModes(token: CancellationToken): Promise<readonly ICustomChatMode[]>;
 
 	/**
-	 * Get all metadata for entire prompt references tree
-	 * that spans out of each of the provided files.
-	 *
-	 * In other words, the metadata tree is built starting from
-	 * each of the provided files, therefore the result is a number
-	 * of metadata trees, one for each file.
-	 */
-	getAllMetadata(promptUris: readonly URI[]): Promise<readonly IMetadata[]>;
-
-	/**
 	 * Parses the provided URI
 	 * @param uris
 	 */
-	parse(uri: URI, token: CancellationToken): Promise<IPromptParserResult>;
+	parseNew(uri: URI, token: CancellationToken): Promise<ParsedPromptFile>;
 
 	/**
 	 * Returns the prompt file type for the given URI.
@@ -225,10 +187,7 @@ export interface IChatPromptSlashCommand {
 	readonly promptPath?: IPromptPath;
 }
 
-
-export interface IPromptParserResult {
-	readonly uri: URI;
-	readonly metadata: TMetadata | null;
-	readonly topError: ITopError | undefined;
-	readonly allValidReferences: readonly URI[];
+export interface IPromptHeader {
+	readonly node: YamlNode | undefined;
+	readonly errors: YamlParseError[];
 }

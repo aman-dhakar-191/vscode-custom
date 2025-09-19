@@ -17,6 +17,7 @@ export enum InlineEditTabAction {
 
 export interface IInlineEditsView {
 	isHovered: IObservable<boolean>;
+	minEditorScrollHeight?: IObservable<number>;
 	onDidClick: Event<IMouseEvent>;
 }
 
@@ -29,13 +30,38 @@ export interface IInlineEditModel {
 	displayName: string;
 	action: Command | undefined;
 	extensionCommands: InlineCompletionCommand[];
+	isInDiffEditor: boolean;
 	inlineEdit: InlineEditWithChanges;
 	tabAction: IObservable<InlineEditTabAction>;
 	showCollapsed: IObservable<boolean>;
 	displayLocation: InlineCompletionDisplayLocation | undefined;
 
-	handleInlineEditShown(): void;
+	handleInlineEditShown(viewKind: string, viewData?: InlineCompletionViewData): void;
 	accept(): void;
 	jump(): void;
 	abort(reason: string): void;
 }
+
+// TODO: Move this out of here as it is also includes ghosttext
+export enum InlineCompletionViewKind {
+	GhostText = 'ghostText',
+	Custom = 'custom',
+	SideBySide = 'sideBySide',
+	Deletion = 'deletion',
+	InsertionInline = 'insertionInline',
+	InsertionMultiLine = 'insertionMultiLine',
+	WordReplacements = 'wordReplacements',
+	LineReplacement = 'lineReplacement',
+	Collapsed = 'collapsed'
+}
+
+export type InlineCompletionViewData = {
+	cursorColumnDistance: number;
+	cursorLineDistance: number;
+	lineCountOriginal: number;
+	lineCountModified: number;
+	characterCountOriginal: number;
+	characterCountModified: number;
+	disjointReplacements: number;
+	sameShapeReplacements?: boolean;
+};
